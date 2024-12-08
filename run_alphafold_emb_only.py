@@ -410,26 +410,7 @@ def predict_structure(
         f.create_dataset(fold_input.name, data=embeddings_single)
       with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_target_feat.h5'), 'w') as f:
         f.create_dataset(fold_input.name, data=embeddings_target_feat)
-    print(f'Extracting output structures (one per sample) for seed {seed}...')
-    extract_structures = time.time()
-    inference_results = model_runner.extract_structures(
-        batch=example, result=result, target_name=fold_input.name
-    )
-    print(
-        f'Extracting output structures (one per sample) for seed {seed} took '
-        f' {time.time() - extract_structures:.2f} seconds.'
-    )
-    all_inference_results.append(
-        ResultsForSeed(
-            seed=seed,
-            inference_results=inference_results,
-            full_fold_input=fold_input,
-        )
-    )
-    print(
-        'Running model inference and extracting output structures for seed'
-        f' {seed} took  {time.time() - inference_start_time:.2f} seconds.'
-    )
+
   print(
       'Running model inference and extracting output structures for seeds'
       f' {fold_input.rng_seeds} took '
