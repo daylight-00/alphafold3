@@ -404,12 +404,12 @@ def predict_structure(
       print(f'embeddings_pair: {embeddings_pair.shape}')
       print(f'embeddings_single: {embeddings_single.shape}')
       print(f'embeddings_target_feat: {embeddings_target_feat.shape}')
-      with h5py.File(f'af3_pair.h5', 'w') as f:
-        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_pair)
-      with h5py.File('af3_single.h5', 'w') as f:
-        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_single)
-      with h5py.File('af3_target_feat.h5', 'w') as f:
-        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_target_feat)
+      with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_pair.h5'), 'w') as f:
+        f.create_dataset(fold_input.name, data=np.mean(embeddings_pair, axis=-1))
+      with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_single.h5'), 'w') as f:
+        f.create_dataset(fold_input.name, data=embeddings_single)
+      with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_target_feat.h5'), 'w') as f:
+        f.create_dataset(fold_input.name, data=embeddings_target_feat)
     print(f'Extracting output structures (one per sample) for seed {seed}...')
     extract_structures = time.time()
     inference_results = model_runner.extract_structures(
