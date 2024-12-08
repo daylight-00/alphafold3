@@ -306,6 +306,7 @@ class Diffuser(hk.Module):
         'diffusion_samples': samples,
         'distogram': distogram,
         **confidence_output,
+        'embeddings': embeddings,
     }
 
   @classmethod

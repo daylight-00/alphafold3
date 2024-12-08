@@ -54,11 +54,13 @@ import haiku as hk
 import jax
 from jax import numpy as jnp
 import numpy as np
+import h5py
 
 
-_HOME_DIR = pathlib.Path(os.environ.get('HOME'))
-_DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
-_DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
+# _HOME_DIR = pathlib.Path(os.environ.get('HOME'))
+_HOME_DIR = pathlib.Path('/home/sim/alphafold3/')
+_DEFAULT_MODEL_DIR = _HOME_DIR / 'models/model_103275239_1'
+_DEFAULT_DB_DIR = _HOME_DIR / 'AF3DB'
 
 
 # Input and output paths.
@@ -98,27 +100,32 @@ _RUN_INFERENCE = flags.DEFINE_bool(
 # Binary paths.
 _JACKHMMER_BINARY_PATH = flags.DEFINE_string(
     'jackhmmer_binary_path',
-    shutil.which('jackhmmer'),
+    # shutil.which('jackhmmer'),
+    shutil.which('/home/sim/alphafold3/hmmer/bin/jackhmmer'),
     'Path to the Jackhmmer binary.',
 )
 _NHMMER_BINARY_PATH = flags.DEFINE_string(
     'nhmmer_binary_path',
-    shutil.which('nhmmer'),
+    # shutil.which('nhmmer'),
+    shutil.which('/home/sim/alphafold3/hmmer/bin/nhmmer'),
     'Path to the Nhmmer binary.',
 )
 _HMMALIGN_BINARY_PATH = flags.DEFINE_string(
     'hmmalign_binary_path',
-    shutil.which('hmmalign'),
+    # shutil.which('hmmalign'),
+    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmalign'),
     'Path to the Hmmalign binary.',
 )
 _HMMSEARCH_BINARY_PATH = flags.DEFINE_string(
     'hmmsearch_binary_path',
-    shutil.which('hmmsearch'),
+    # shutil.which('hmmsearch'),
+    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmsearch'),
     'Path to the Hmmsearch binary.',
 )
 _HMMBUILD_BINARY_PATH = flags.DEFINE_string(
     'hmmbuild_binary_path',
-    shutil.which('hmmbuild'),
+    # shutil.which('hmmbuild'),
+    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmbuild'),
     'Path to the Hmmbuild binary.',
 )
 
@@ -389,6 +396,20 @@ def predict_structure(
         f'Running model inference for seed {seed} took '
         f' {time.time() - inference_start_time:.2f} seconds.'
     )
+    if True:
+      print('Saving embeddings...')
+      embeddings_pair = result['embeddings']['pair']
+      embeddings_single = result['embeddings']['single']
+      embeddings_target_feat = result['embeddings']['target_feat']
+      print(f'embeddings_pair: {embeddings_pair.shape}')
+      print(f'embeddings_single: {embeddings_single.shape}')
+      print(f'embeddings_target_feat: {embeddings_target_feat.shape}')
+      with h5py.File(f'af3_pair.h5', 'w') as f:
+        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_pair)
+      with h5py.File('af3_single.h5', 'w') as f:
+        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_single)
+      with h5py.File('af3_target_feat.h5', 'w') as f:
+        f.create_dataset(os.path.join(_OUTPUT_DIR.value, fold_input.name), data=embeddings_target_feat)
     print(f'Extracting output structures (one per sample) for seed {seed}...')
     extract_structures = time.time()
     inference_results = model_runner.extract_structures(
