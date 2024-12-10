@@ -22,6 +22,7 @@ from alphafold3.constants import chemical_components
 from alphafold3.constants import mmcif_names
 from alphafold3.constants import periodic_table
 from alphafold3.constants import residue_names
+from alphafold3.cpp import cif_dict
 from alphafold3.data import msa as msa_module
 from alphafold3.data import templates
 from alphafold3.data.tools import rdkit_utils
@@ -35,7 +36,6 @@ import chex
 import jax.numpy as jnp
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
 
 
 xnp_ndarray: TypeAlias = np.ndarray | jnp.ndarray  # pylint: disable=invalid-name
@@ -1432,6 +1432,45 @@ def random_augmentation(
   return positions_target
 
 
+def _get_reference_positions_from_ccd_cif(
+    ccd_cif: cif_dict.CifDict,
+    ref_max_modified_date: datetime.date,
+    logging_name: str,
+) -> np.ndarray:
+  """Creates reference positions from a CCD mmcif data block."""
+  num_atoms = len(ccd_cif['_chem_comp_atom.atom_id'])
+  if '_chem_comp_atom.pdbx_model_Cartn_x_ideal' in ccd_cif:
+    atom_x = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_x_ideal']
+    atom_y = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_y_ideal']
+    atom_z = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_z_ideal']
+  else:
+    atom_x = np.array(['?'] * num_atoms)
+    atom_y = np.array(['?'] * num_atoms)
+    atom_z = np.array(['?'] * num_atoms)
+  pos = np.array([[x, y, z] for x, y, z in zip(atom_x, atom_y, atom_z)])
+  # Unknown reference coordinates are specified by '?' in chem comp dict.
+  # Replace unknown reference coords with 0.
+  if '?' in pos and '_chem_comp.pdbx_modified_date' in ccd_cif:
+    # Use reference coordinates if modifed date is before cutoff.
+    modified_dates = [
+        datetime.date.fromisoformat(date)
+        for date in ccd_cif['_chem_comp.pdbx_modified_date']
+    ]
+    max_modified_date = max(modified_dates)
+    if max_modified_date < ref_max_modified_date:
+      atom_x = ccd_cif['_chem_comp_atom.model_Cartn_x']
+      atom_y = ccd_cif['_chem_comp_atom.model_Cartn_y']
+      atom_z = ccd_cif['_chem_comp_atom.model_Cartn_z']
+      pos = np.array([[x, y, z] for x, y, z in zip(atom_x, atom_y, atom_z)])
+  if '?' in pos:
+    if np.all(pos == '?'):
+      logging.warning('All ref positions unknown for: %s', logging_name)
+    else:
+      logging.warning('Some ref positions unknown for: %s', logging_name)
+    pos[pos == '?'] = 0
+  return np.array(pos, dtype=np.float32)
+
+
 def get_reference(
     res_name: str,
     chemical_components_data: struc_chem_comps.ChemicalComponentsData,
@@ -1442,126 +1481,100 @@ def get_reference(
 ) -> tuple[dict[str, Any], Any, Any]:
   """Reference structure for residue from CCD or SMILES.
 
+  Uses CCD entry if available, otherwise uses SMILES from chemical components
+  data. Conformer generation is done using RDKit, with a fallback to CCD ideal
+  or reference coordinates if RDKit fails and those coordinates are supplied.
+
   Args:
     res_name: ccd code of the residue.
     chemical_components_data: ChemicalComponentsData for making ref structure.
     ccd: The chemical components dictionary.
     random_state: Numpy RandomState
     ref_max_modified_date: date beyond which reference structures must not be
-      modefied.
+      modified to be allowed to use reference coordinates.
     intra_ligand_ptm_bonds: Whether to return intra ligand/ ptm bonds.
 
   Returns:
     Mapping from atom names to features, from_atoms, dest_atoms.
   """
+
   ccd_cif = ccd.get(res_name)
-  non_ccd_with_smiles = False
-  if not ccd_cif:
-    # If res name is non-CCD try to get SMILES from chem comp dict.
-    has_smiles = (
+
+  mol = None
+  if ccd_cif:
+    try:
+      mol = rdkit_utils.mol_from_ccd_cif(ccd_cif, remove_hydrogens=False)
+    except rdkit_utils.MolFromMmcifError:
+      logging.warning('Failed to construct mol from ccd_cif for: %s', res_name)
+  else:  # No CCD entry, use SMILES from chemical components data.
+    if not (
         chemical_components_data.chem_comp
         and res_name in chemical_components_data.chem_comp
         and chemical_components_data.chem_comp[res_name].pdbx_smiles
-    )
-    if has_smiles:
-      non_ccd_with_smiles = True
-    else:
+    ):
+      logging.warning('No CCD entry or SMILES for %s', res_name)
       # If no SMILES or CCD, return empty dictionary.
       return dict(), None, None
-
-  pos = []
-  elements = []
-  charges = []
-  atom_names = []
-
-  mol_from_smiles = None  # useless init to make pylint happy
-  if non_ccd_with_smiles:
     smiles_string = chemical_components_data.chem_comp[res_name].pdbx_smiles
-    mol_from_smiles = Chem.MolFromSmiles(smiles_string)
-    if mol_from_smiles is None:
+    logging.info('Using SMILES for: %s - %s', res_name, smiles_string)
+
+    mol = Chem.MolFromSmiles(smiles_string)
+    if mol is None:
       logging.warning(
-          'Fail to construct RDKit Mol from the SMILES string: %s',
+          'Fail to construct RDKit Mol for %s, from SMILES string: %s',
+          res_name,
           smiles_string,
       )
       return dict(), None, None
-    # Note this does not contain ideal coordinates, just bonds.
-    ccd_cif = rdkit_utils.mol_to_ccd_cif(
-        mol_from_smiles, component_id='fake_cif'
-    )
+    mol = Chem.AddHs(mol)
+    # No existing names, we assign them from the graph.
+    mol = rdkit_utils.assign_atom_names_from_graph(mol)
+    # Temporary CCD cif with just atom and bond information, no coordinates.
+    ccd_cif = rdkit_utils.mol_to_ccd_cif(mol, component_id='fake_cif')
 
-  # RDKit for non-CCD structure and if ref should be a random RDKit conformer.
-  try:
-    if non_ccd_with_smiles:
-      m = mol_from_smiles
-      m = Chem.AddHs(m)
-      m = rdkit_utils.assign_atom_names_from_graph(m, keep_existing_names=True)
-      logging.info(
-          'Success constructing SMILES reference structure for: %s', res_name
-      )
-    else:
-      m = rdkit_utils.mol_from_ccd_cif(ccd_cif, remove_hydrogens=False)
-    # Stochastic conformer search method.
-    # V3 is the latest and supports macrocycles .
-    params = AllChem.ETKDGv3()
-    params.randomSeed = int(random_state.randint(1, 1 << 31))
-    conformer_id = AllChem.EmbedMolecule(m, params)
-    conformer = m.GetConformer(conformer_id)
-    for i, atom in enumerate(m.GetAtoms()):
-      elements.append(atom.GetAtomicNum())
-      charges.append(atom.GetFormalCharge())
-      name = atom.GetProp('atom_name')
-      atom_names.append(name)
-      coords = conformer.GetAtomPosition(i)
-      pos.append([coords.x, coords.y, coords.z])
-    pos = np.array(pos, dtype=np.float32)
-  except (rdkit_utils.MolFromMmcifError, ValueError):
-    logging.warning(
-        'Failed to construct RDKit reference structure for: %s', res_name
-    )
+  conformer = None
+  atom_names = []
+  elements = []
+  charges = []
+  pos = []
 
-  if not atom_names:
-    # Get CCD ideal coordinates if RDKit fails.
+  # If mol is not None (must be True for SMILES case), then we try and generate
+  # an RDKit conformer.
+  if mol is not None:
+    conformer_random_seed = int(random_state.randint(1, 1 << 31))
+    conformer = rdkit_utils.get_random_conformer(
+        mol=mol, random_seed=conformer_random_seed, logging_name=res_name
+    )
+    if conformer:
+      for idx, atom in enumerate(mol.GetAtoms()):
+        atom_names.append(atom.GetProp('atom_name'))
+        elements.append(atom.GetAtomicNum())
+        charges.append(atom.GetFormalCharge())
+        coords = conformer.GetAtomPosition(idx)
+        pos.append([coords.x, coords.y, coords.z])
+      pos = np.array(pos, dtype=np.float32)
+
+  # If no mol could be generated (can only happen when using CCD), or no
+  # conformer could be generated from the mol (can happen in either case), then
+  # use CCD cif instead (which will have zero coordinates for SMILES case).
+  if conformer is None:
     atom_names = ccd_cif['_chem_comp_atom.atom_id']
-    # If mol_from_smiles then it won't have ideal coordinates by default.
-    if '_chem_comp_atom.pdbx_model_Cartn_x_ideal' in ccd_cif:
-      atom_x = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_x_ideal']
-      atom_y = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_y_ideal']
-      atom_z = ccd_cif['_chem_comp_atom.pdbx_model_Cartn_z_ideal']
-    else:
-      atom_x = np.array(['?'] * len(atom_names))
-      atom_y = np.array(['?'] * len(atom_names))
-      atom_z = np.array(['?'] * len(atom_names))
-    type_symbols = ccd_cif['_chem_comp_atom.type_symbol']
     charges = ccd_cif['_chem_comp_atom.charge']
+    type_symbols = ccd_cif['_chem_comp_atom.type_symbol']
     elements = [
         periodic_table.ATOMIC_NUMBER.get(elem_type.capitalize(), 0)
         for elem_type in type_symbols
     ]
-    pos = np.array([[x, y, z] for x, y, z in zip(atom_x, atom_y, atom_z)])
-    # Unknown reference coordinates are specified by '?' in chem comp dict.
-    # Replace unknown reference coords with 0.
-    if '?' in pos and '_chem_comp.pdbx_modified_date' in ccd_cif:
-      # Use reference coordinates if modifed date is before cutoff.
-      modified_dates = [
-          datetime.date.fromisoformat(date)
-          for date in ccd_cif['_chem_comp.pdbx_modified_date']
-      ]
-      max_modified_date = max(modified_dates)
-      if max_modified_date < ref_max_modified_date:
-        atom_x = ccd_cif['_chem_comp_atom.model_Cartn_x']
-        atom_y = ccd_cif['_chem_comp_atom.model_Cartn_y']
-        atom_z = ccd_cif['_chem_comp_atom.model_Cartn_z']
-        pos = np.array([[x, y, z] for x, y, z in zip(atom_x, atom_y, atom_z)])
-    if '?' in pos:
-      if np.all(pos == '?'):
-        logging.warning('All ref positions unknown for: %s', res_name)
-      else:
-        logging.warning('Some ref positions unknown for: %s', res_name)
-      pos[pos == '?'] = 0
-    pos = np.array(pos, dtype=np.float32)
+    pos = _get_reference_positions_from_ccd_cif(
+        ccd_cif=ccd_cif,
+        ref_max_modified_date=ref_max_modified_date,
+        logging_name=res_name,
+    )
 
+  # Augment reference positions.
   pos = random_augmentation(pos, random_state)
 
+  # Extract atom and bond information from CCD cif.
   if intra_ligand_ptm_bonds:
     assert ccd_cif is not None, 'CCD CIF is None'
     from_atom = ccd_cif.get('_chem_comp_bond.atom_id_1', None)
