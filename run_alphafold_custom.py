@@ -33,7 +33,6 @@ import textwrap
 import time
 import typing
 from typing import overload
-
 from absl import app
 from absl import flags
 from alphafold3.common import folding_input
@@ -44,8 +43,8 @@ from alphafold3.data import featurisation
 from alphafold3.data import pipeline
 from alphafold3.jax.attention import attention
 from alphafold3.model import features
-from alphafold3.model import model
-from alphafold3.model_custom import model
+# from alphafold3.model import model
+import model_custom as model
 from alphafold3.model import params
 from alphafold3.model import post_processing
 from alphafold3.model.components import utils
@@ -57,10 +56,12 @@ import h5py
 
 
 # _HOME_DIR = pathlib.Path(os.environ.get('HOME'))
-_HOME_DIR = pathlib.Path('/home/sim/alphafold3/')
+# _HOME_DIR = pathlib.Path('/home/sim/alphafold3/')
+_HOME_DIR = pathlib.Path('/home/appl/git-repo/AlphaFold3/')
 _DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
 # _DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
-_DEFAULT_DB_DIR = _HOME_DIR / 'AF3DB'
+# _DEFAULT_DB_DIR = _HOME_DIR / 'AF3DB'
+_DEFAULT_DB_DIR = pathlib.Path('/DB/AF3DB/')
 
 
 # Input and output paths.
@@ -101,31 +102,31 @@ _RUN_INFERENCE = flags.DEFINE_bool(
 _JACKHMMER_BINARY_PATH = flags.DEFINE_string(
     'jackhmmer_binary_path',
     # shutil.which('jackhmmer'),
-    shutil.which('/home/sim/alphafold3/hmmer/bin/jackhmmer'),
+    str(_HOME_DIR) + '/hmmer/bin/jackhmmer',
     'Path to the Jackhmmer binary.',
 )
 _NHMMER_BINARY_PATH = flags.DEFINE_string(
     'nhmmer_binary_path',
     # shutil.which('nhmmer'),
-    shutil.which('/home/sim/alphafold3/hmmer/bin/nhmmer'),
+    str(_HOME_DIR) + '/hmmer/bin/nhmmer',
     'Path to the Nhmmer binary.',
 )
 _HMMALIGN_BINARY_PATH = flags.DEFINE_string(
     'hmmalign_binary_path',
     # shutil.which('hmmalign'),
-    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmalign'),
+    str(_HOME_DIR) + '/hmmer/bin/hmmalign',
     'Path to the Hmmalign binary.',
 )
 _HMMSEARCH_BINARY_PATH = flags.DEFINE_string(
     'hmmsearch_binary_path',
     # shutil.which('hmmsearch'),
-    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmsearch'),
+    str(_HOME_DIR) + '/hmmer/bin/hmmsearch',
     'Path to the Hmmsearch binary.',
 )
 _HMMBUILD_BINARY_PATH = flags.DEFINE_string(
     'hmmbuild_binary_path',
     # shutil.which('hmmbuild'),
-    shutil.which('/home/sim/alphafold3/hmmer/bin/hmmbuild'),
+    str(_HOME_DIR) + '/hmmer/bin/hmmbuild',
     'Path to the Hmmbuild binary.',
 )
 
@@ -175,8 +176,8 @@ _RNA_CENTRAL_DATABASE_PATH = flags.DEFINE_string(
 )
 _PDB_DATABASE_PATH = flags.DEFINE_string(
     'pdb_database_path',
-    # '${DB_DIR}/mmcif_files',
-    '/home/sim/alphafold3/AF3DB/pdb_2022_09_28_mmcif_files.tar',
+    '${DB_DIR}/mmcif_files',
+    # '/home/sim/alphafold3/AF3DB/pdb_2022_09_28_mmcif_files.tar',
     'PDB database directory with mmCIF files path, used for template search.',
 )
 _SEQRES_DATABASE_PATH = flags.DEFINE_string(
@@ -230,8 +231,9 @@ _GPU_DEVICE = flags.DEFINE_integer(
 _BUCKETS = flags.DEFINE_list(
     'buckets',
     # pyformat: disable
-    ['256', '512', '768', '1024', '1280', '1536', '2048', '2560', '3072',
-     '3584', '4096', '4608', '5120'],
+    # ['256', '512', '768', '1024', '1280', '1536', '2048', '2560', '3072',
+    #  '3584', '4096', '4608', '5120'],
+    ['1'],
     # pyformat: enable
     'Strictly increasing order of token sizes for which to cache compilations.'
     ' For any input with more tokens than the largest bucket size, a new bucket'
@@ -406,7 +408,7 @@ def predict_structure(
 ) -> Sequence[ResultsForSeed]:
   """Runs the full inference pipeline to predict structures for each seed."""
 
-  print(f'Featurising data for seeds {fold_input.rng_seeds}...')
+  print(f'Featurising data with {len(fold_input.rng_seeds)} seed(s)...')
   featurisation_start_time = time.time()
   ccd = chemical_components.cached_ccd(user_ccd=fold_input.user_ccd)
   featurised_examples = featurisation.featurise_input(
@@ -417,18 +419,22 @@ def predict_structure(
       conformer_max_iterations=conformer_max_iterations,
   )
   print(
-      f'Featurising data for seeds {fold_input.rng_seeds} took '
+      f'Featurising data with {len(fold_input.rng_seeds)} seed(s) took'
       f' {time.time() - featurisation_start_time:.2f} seconds.'
+  )
+  print(
+      'Running model inference and extracting output structure samples with'
+      f' {len(fold_input.rng_seeds)} seed(s)...'
   )
   all_inference_start_time = time.time()
   all_inference_results = []
   for seed, example in zip(fold_input.rng_seeds, featurised_examples):
-    print(f'Running model inference for seed {seed}...')
+    print(f'Running model inference with seed {seed}...')
     inference_start_time = time.time()
     rng_key = jax.random.PRNGKey(seed)
     result = model_runner.run_inference(example, rng_key)
     print(
-        f'Running model inference for seed {seed} took '
+        f'Running model inference with seed {seed} took'
         f' {time.time() - inference_start_time:.2f} seconds.'
     )
 
@@ -440,21 +446,23 @@ def predict_structure(
       print(f'embeddings_pair: {embeddings_pair.shape}')
       print(f'embeddings_single: {embeddings_single.shape}')
       print(f'embeddings_target_feat: {embeddings_target_feat.shape}')
+      length = example['seq_length']
       with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_pair.h5'), 'a') as f:
-        f.create_dataset(fold_input.name, data=np.mean(embeddings_pair, axis=-1))
+        # f.create_dataset(fold_input.name, data=np.mean(embeddings_pair, axis=-1))
+        f.create_dataset(fold_input.name, data=embeddings_pair[:length, :length])
       with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_single.h5'), 'a') as f:
-        f.create_dataset(fold_input.name, data=embeddings_single)
-      with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_target_feat.h5'), 'a') as f:
-        f.create_dataset(fold_input.name, data=embeddings_target_feat)
-        
-    # print(f'Extracting output structures (one per sample) for seed {seed}...')
+        f.create_dataset(fold_input.name, data=embeddings_single[:length])
+      # with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_target_feat.h5'), 'a') as f:
+      #   f.create_dataset(fold_input.name, data=embeddings_target_feat)
+
+    # print(f'Extracting output structure samples with seed {seed}...')
     # extract_structures = time.time()
     # inference_results = model_runner.extract_structures(
     #     batch=example, result=result, target_name=fold_input.name
     # )
     # print(
-    #     f'Extracting output structures (one per sample) for seed {seed} took '
-    #     f' {time.time() - extract_structures:.2f} seconds.'
+    #     f'Extracting {len(inference_results)} output structure samples with'
+    #     f' seed {seed} took {time.time() - extract_structures:.2f} seconds.'
     # )
 
     # embeddings = model_runner.extract_embeddings(result)
@@ -467,13 +475,9 @@ def predict_structure(
     #         embeddings=embeddings,
     #     )
     # )
-    # print(
-    #     'Running model inference and extracting output structures for seed'
-    #     f' {seed} took {time.time() - inference_start_time:.2f} seconds.'
-    # )
   print(
-      'Running model inference and extracting output structures for seeds'
-      f' {fold_input.rng_seeds} took'
+      'Running model inference and extracting output structures with'
+      f' {len(fold_input.rng_seeds)} seed(s) took'
       f' {time.time() - all_inference_start_time:.2f} seconds.'
   )
   return all_inference_results
@@ -485,9 +489,9 @@ def write_fold_input_json(
 ) -> None:
   """Writes the input JSON to the output directory."""
   os.makedirs(output_dir, exist_ok=True)
-  with open(
-      os.path.join(output_dir, f'{fold_input.sanitised_name()}_data.json'), 'wt'
-  ) as f:
+  path = os.path.join(output_dir, f'{fold_input.sanitised_name()}_data.json')
+  print(f'Writing model input JSON to {path}')
+  with open(path, 'wt') as f:
     f.write(fold_input.to_json())
 
 
@@ -611,7 +615,7 @@ def process_fold_input(
   Raises:
     ValueError: If the fold input has no chains.
   """
-  print(f'Processing fold input {fold_input.name}')
+  print(f'\nRunning fold job {fold_input.name}...')
 
   if not fold_input.chains:
     raise ValueError('Fold input has no chains.')
@@ -621,16 +625,12 @@ def process_fold_input(
         f'{output_dir}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
     )
     print(
-        f'Output directory {output_dir} exists and non-empty, using instead '
-        f' {new_output_dir}.'
+        f'Output will be written in {new_output_dir} since {output_dir} is'
+        ' non-empty.'
     )
     output_dir = new_output_dir
-
-  if model_runner is not None:
-    # If we're running inference, check we can load the model parameters before
-    # (possibly) launching the data pipeline.
-    print('Checking we can load the model parameters...')
-    _ = model_runner.model_params
+  else:
+    print(f'Output will be written in {output_dir}')
 
   if data_pipeline_config is None:
     print('Skipping data pipeline...')
@@ -638,16 +638,14 @@ def process_fold_input(
     print('Running data pipeline...')
     fold_input = pipeline.DataPipeline(data_pipeline_config).process(fold_input)
 
-  print(f'Output directory: {output_dir}')
-  print(f'Writing model input JSON to {output_dir}')
   write_fold_input_json(fold_input, output_dir)
   if model_runner is None:
-    print('Skipping inference...')
+    print('Skipping model inference...')
     output = fold_input
   else:
     print(
-        f'Predicting 3D structure for {fold_input.name} for seed(s)'
-        f' {fold_input.rng_seeds}...'
+        f'Predicting 3D structure for {fold_input.name} with'
+        f' {len(fold_input.rng_seeds)} seed(s)...'
     )
     all_inference_results = predict_structure(
         fold_input=fold_input,
@@ -655,10 +653,7 @@ def process_fold_input(
         buckets=buckets,
         conformer_max_iterations=conformer_max_iterations,
     )
-    print(
-        f'Writing outputs for {fold_input.name} for seed(s)'
-        f' {fold_input.rng_seeds}...'
-    )
+    print(f'Writing outputs with {len(fold_input.rng_seeds)} seed(s)...')
     write_outputs(
         all_inference_results=all_inference_results,
         output_dir=output_dir,
@@ -666,7 +661,7 @@ def process_fold_input(
     )
     output = all_inference_results
 
-  print(f'Done processing fold input {fold_input.name}.')
+  print(f'Fold job {fold_input.name} done.\n')
   return output
 
 
@@ -746,7 +741,7 @@ def main(_):
       break_on_hyphens=False,
       width=80,
   )
-  print('\n'.join(notice))
+  print('\n' + '\n'.join(notice) + '\n')
 
   if _RUN_DATA_PIPELINE.value:
     expand_path = lambda x: replace_db_dir(x, DB_DIR.value)
@@ -773,7 +768,6 @@ def main(_):
         max_template_date=max_template_date,
     )
   else:
-    print('Skipping running the data pipeline.')
     data_pipeline_config = None
 
   if _RUN_INFERENCE.value:
@@ -796,18 +790,16 @@ def main(_):
         device=devices[_GPU_DEVICE.value],
         model_dir=pathlib.Path(MODEL_DIR.value),
     )
+    # Check we can load the model parameters before launching anything.
+    print('Checking that model parameters can be loaded...')
+    _ = model_runner.model_params
   else:
-    print('Skipping running model inference.')
     model_runner = None
 
-  print('Processing fold inputs.')
   num_fold_inputs = 0
   for fold_input in fold_inputs:
-    print(f'Processing fold input #{num_fold_inputs + 1}')
     if _NUM_SEEDS.value is not None:
-      print(
-          f'Expanding fold input {fold_input.name} to {_NUM_SEEDS.value} seeds'
-      )
+      print(f'Expanding fold job {fold_input.name} to {_NUM_SEEDS.value} seeds')
       fold_input = fold_input.with_multiple_seeds(_NUM_SEEDS.value)
     process_fold_input(
         fold_input=fold_input,
@@ -819,11 +811,9 @@ def main(_):
     )
     num_fold_inputs += 1
 
-  print(f'Done processing {num_fold_inputs} fold inputs.')
+  print(f'Done running {num_fold_inputs} fold jobs.')
 
 
 if __name__ == '__main__':
-  flags.mark_flags_as_required([
-      'output_dir',
-  ])
+  flags.mark_flags_as_required(['output_dir'])
   app.run(main)

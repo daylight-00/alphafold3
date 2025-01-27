@@ -32,7 +32,6 @@ from alphafold3.model.network import diffusion_head
 from alphafold3.model.network import distogram_head
 from alphafold3.model.network import evoformer as evoformer_network
 from alphafold3.model.network import featurization
-from alphafold3.structure import mmcif
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -306,34 +305,34 @@ class Model(hk.Module):
       num_iter = self.config.num_recycles + 1
       embeddings, _ = hk.fori_loop(0, num_iter, recycle_body, (embeddings, key))
 
-    samples = self._sample_diffusion(
-        batch,
-        embeddings,
-        sample_config=self.config.heads.diffusion.eval,
-    )
+    # samples = self._sample_diffusion(
+    #     batch,
+    #     embeddings,
+    #     sample_config=self.config.heads.diffusion.eval,
+    # )
 
-    # Compute dist_error_fn over all samples for distance error logging.
-    confidence_output = mapping.sharded_map(
-        lambda dense_atom_positions: confidence_head.ConfidenceHead(
-            self.config.heads.confidence, self.global_config
-        )(
-            dense_atom_positions=dense_atom_positions,
-            embeddings=embeddings,
-            seq_mask=batch.token_features.mask,
-            token_atoms_to_pseudo_beta=batch.pseudo_beta_info.token_atoms_to_pseudo_beta,
-            asym_id=batch.token_features.asym_id,
-        ),
-        in_axes=0,
-    )(samples['atom_positions'])
+    # # Compute dist_error_fn over all samples for distance error logging.
+    # confidence_output = mapping.sharded_map(
+    #     lambda dense_atom_positions: confidence_head.ConfidenceHead(
+    #         self.config.heads.confidence, self.global_config
+    #     )(
+    #         dense_atom_positions=dense_atom_positions,
+    #         embeddings=embeddings,
+    #         seq_mask=batch.token_features.mask,
+    #         token_atoms_to_pseudo_beta=batch.pseudo_beta_info.token_atoms_to_pseudo_beta,
+    #         asym_id=batch.token_features.asym_id,
+    #     ),
+    #     in_axes=0,
+    # )(samples['atom_positions'])
 
-    distogram = distogram_head.DistogramHead(
-        self.config.heads.distogram, self.global_config
-    )(batch, embeddings)
+    # distogram = distogram_head.DistogramHead(
+    #     self.config.heads.distogram, self.global_config
+    # )(batch, embeddings)
 
     output = {
-        'diffusion_samples': samples,
-        'distogram': distogram,
-        **confidence_output,
+        # 'diffusion_samples': samples,
+        # 'distogram': distogram,
+        # **confidence_output,
         'embeddings': embeddings,
     }
     if self.config.return_embeddings:
@@ -393,7 +392,11 @@ class Model(hk.Module):
     ptm_iptm_average = 0.8 * iptm + 0.2 * ptm
 
     asym_ids = batch.token_features.asym_id[:num_tokens]
-    chain_ids = [mmcif.int_id_to_str_id(asym_id) for asym_id in asym_ids]
+    # Map asym IDs back to chain IDs. Asym IDs are constructed from chain IDs by
+    # iterating over the chain IDs, and for each unique chain ID incrementing
+    # the asym ID by 1 and mapping it to the particular chain ID. Asym IDs are
+    # 1-indexed, so subtract 1 to get back to the chain ID.
+    chain_ids = [pred_structure.chains[asym_id - 1] for asym_id in asym_ids]
     res_ids = batch.token_features.residue_index[:num_tokens]
 
     if len(np.unique(asym_ids[:num_tokens])) > 1:
