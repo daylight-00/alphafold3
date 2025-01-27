@@ -77,7 +77,7 @@ def featurise_input(
   for rng_seed in fold_input.rng_seeds:
     featurisation_start_time = time.time()
     if verbose:
-      print(f'Featurising {fold_input.name} with rng_seed {rng_seed}.')
+      print(f'Featurising data with seed {rng_seed}.')
     batch = data_pipeline.process_item(
         fold_input=fold_input,
         ccd=ccd,
@@ -86,8 +86,8 @@ def featurise_input(
     )
     if verbose:
       print(
-          f'Featurising {fold_input.name} with rng_seed {rng_seed} '
-          f'took {time.time() - featurisation_start_time:.2f} seconds.'
+          f'Featurising data with seed {rng_seed} took'
+          f' {time.time() - featurisation_start_time:.2f} seconds.'
       )
     batches.append(batch)
 

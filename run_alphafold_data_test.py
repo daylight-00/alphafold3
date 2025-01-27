@@ -162,14 +162,14 @@ class DataPipelineTest(test_utils.StructureTestCase):
         'sequences': [
             {
                 'protein': {
-                    'id': 'A',
+                    'id': 'P',
                     'sequence': 'SEFEKLRQTGDELVQAFQRLREIFDKGDDDSLEQVLEEIEELIQKHRQLFDNRQEAADTEAAKQGDQWVQLFQRFREAIDKGDKDSLEQLLEELEQALQKIRELAEKKN',
                     'modifications': [],
                     'unpairedMsa': None,
                     'pairedMsa': None,
                 }
             },
-            {'ligand': {'id': 'B', 'ccdCodes': ['7BU']}},
+            {'ligand': {'id': 'LL', 'ccdCodes': ['7BU']}},
         ],
         'dialect': folding_input.JSON_DIALECT,
         'version': folding_input.JSON_VERSION,

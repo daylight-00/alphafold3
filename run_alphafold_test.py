@@ -166,14 +166,14 @@ class InferenceTest(test_utils.StructureTestCase):
         'sequences': [
             {
                 'protein': {
-                    'id': 'A',
+                    'id': 'P',
                     'sequence': 'SEFEKLRQTGDELVQAFQRLREIFDKGDDDSLEQVLEEIEELIQKHRQLFDNRQEAADTEAAKQGDQWVQLFQRFREAIDKGDKDSLEQLLEELEQALQKIRELAEKKN',
                     'modifications': [],
                     'unpairedMsa': None,
                     'pairedMsa': None,
                 }
             },
-            {'ligand': {'id': 'B', 'ccdCodes': ['7BU']}},
+            {'ligand': {'id': 'LL', 'ccdCodes': ['7BU']}},
         ],
         'dialect': folding_input.JSON_DIALECT,
         'version': folding_input.JSON_VERSION,
@@ -380,7 +380,6 @@ class InferenceTest(test_utils.StructureTestCase):
           expected_inf.inference_results,
           strict=True,
       ):
-
         # Check RMSD is within tolerance.
         # 5tgy is very stable, NMR samples were all within 3.0 RMSD.
         actual_rmsd = alignment.rmsd_from_coords(
@@ -392,7 +391,11 @@ class InferenceTest(test_utils.StructureTestCase):
             actual_inf.predicted_structure.atom_occupancy,
             [1.0] * actual_inf.predicted_structure.num_atoms,
         )
-
+        # Make sure the token chain IDs are the same as the input chain IDs.
+        self.assertEqual(
+            actual_inf.metadata['token_chain_ids'],
+            ['P'] * len(fold_input.protein_chains[0].sequence) + ['LL'] * 41,
+        )
 
 if __name__ == '__main__':
   absltest.main()
