@@ -33,6 +33,7 @@ import textwrap
 import time
 import typing
 from typing import overload
+
 from absl import app
 from absl import flags
 from alphafold3.common import folding_input
@@ -282,6 +283,13 @@ _SAVE_EMBEDDINGS = flags.DEFINE_bool(
     False,
     'Whether to save the final trunk single and pair embeddings in the output.',
 )
+_FORCE_OUTPUT_DIR = flags.DEFINE_bool(
+    'force_output_dir',
+    False,
+    'Whether to force the output directory to be used even if it already exists'
+    ' and is non-empty. Useful to set this to True to run the data pipeline and'
+    ' the inference separately, but use the same output directory.',
+)
 
 
 def make_model_config(
@@ -356,30 +364,27 @@ class ModelRunner:
     result['__identifier__'] = identifier
     return result
 
-  def extract_structures(
+  def extract_inference_results_and_maybe_embeddings(
       self,
       batch: features.BatchDict,
       result: model.ModelResult,
       target_name: str,
-  ) -> list[model.InferenceResult]:
-    """Generates structures from model outputs."""
-    return list(
+  ) -> tuple[list[model.InferenceResult], dict[str, np.ndarray] | None]:
+    """Extracts inference results and embeddings (if set) from model outputs."""
+    inference_results = list(
         model.Model.get_inference_result(
             batch=batch, result=result, target_name=target_name
         )
     )
-
-  def extract_embeddings(
-      self,
-      result: model.ModelResult,
-  ) -> dict[str, np.ndarray] | None:
-    """Extracts embeddings from model outputs."""
+    num_tokens = len(inference_results[0].metadata['token_chain_ids'])
     embeddings = {}
     if 'single_embeddings' in result:
-      embeddings['single_embeddings'] = result['single_embeddings']
+      embeddings['single_embeddings'] = result['single_embeddings'][:num_tokens]
     if 'pair_embeddings' in result:
-      embeddings['pair_embeddings'] = result['pair_embeddings']
-    return embeddings or None
+      embeddings['pair_embeddings'] = result['pair_embeddings'][
+          :num_tokens, :num_tokens
+      ]
+    return inference_results, embeddings or None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -455,17 +460,17 @@ def predict_structure(
       # with h5py.File(os.path.join(_OUTPUT_DIR.value, 'af3_target_feat.h5'), 'a') as f:
       #   f.create_dataset(fold_input.name, data=embeddings_target_feat)
 
-    # print(f'Extracting output structure samples with seed {seed}...')
+    # print(f'Extracting inference results with seed {seed}...')
     # extract_structures = time.time()
-    # inference_results = model_runner.extract_structures(
-    #     batch=example, result=result, target_name=fold_input.name
+    # inference_results, embeddings = (
+    #     model_runner.extract_inference_results_and_maybe_embeddings(
+    #         batch=example, result=result, target_name=fold_input.name
+    #     )
     # )
     # print(
-    #     f'Extracting {len(inference_results)} output structure samples with'
+    #     f'Extracting {len(inference_results)} inference samples with'
     #     f' seed {seed} took {time.time() - extract_structures:.2f} seconds.'
     # )
-
-    # embeddings = model_runner.extract_embeddings(result)
 
     # all_inference_results.append(
     #     ResultsForSeed(
@@ -547,28 +552,6 @@ def write_outputs(
       writer.writerows(ranking_scores)
 
 
-@overload
-def process_fold_input(
-    fold_input: folding_input.Input,
-    data_pipeline_config: pipeline.DataPipelineConfig | None,
-    model_runner: None,
-    output_dir: os.PathLike[str] | str,
-    buckets: Sequence[int] | None = None,
-) -> folding_input.Input:
-  ...
-
-
-@overload
-def process_fold_input(
-    fold_input: folding_input.Input,
-    data_pipeline_config: pipeline.DataPipelineConfig | None,
-    model_runner: ModelRunner,
-    output_dir: os.PathLike[str] | str,
-    buckets: Sequence[int] | None = None,
-) -> Sequence[ResultsForSeed]:
-  ...
-
-
 def replace_db_dir(path_with_db_dir: str, db_dirs: Sequence[str]) -> str:
   """Replaces the DB_DIR placeholder in a path with the given DB_DIR."""
   template = string.Template(path_with_db_dir)
@@ -585,6 +568,32 @@ def replace_db_dir(path_with_db_dir: str, db_dirs: Sequence[str]) -> str:
   return path_with_db_dir
 
 
+@overload
+def process_fold_input(
+    fold_input: folding_input.Input,
+    data_pipeline_config: pipeline.DataPipelineConfig | None,
+    model_runner: None,
+    output_dir: os.PathLike[str] | str,
+    buckets: Sequence[int] | None = None,
+    conformer_max_iterations: int | None = None,
+    force_output_dir: bool = False,
+) -> folding_input.Input:
+  ...
+
+
+@overload
+def process_fold_input(
+    fold_input: folding_input.Input,
+    data_pipeline_config: pipeline.DataPipelineConfig | None,
+    model_runner: ModelRunner,
+    output_dir: os.PathLike[str] | str,
+    buckets: Sequence[int] | None = None,
+    conformer_max_iterations: int | None = None,
+    force_output_dir: bool = False,
+) -> Sequence[ResultsForSeed]:
+  ...
+
+
 def process_fold_input(
     fold_input: folding_input.Input,
     data_pipeline_config: pipeline.DataPipelineConfig | None,
@@ -592,6 +601,7 @@ def process_fold_input(
     output_dir: os.PathLike[str] | str,
     buckets: Sequence[int] | None = None,
     conformer_max_iterations: int | None = None,
+    force_output_dir: bool = False,
 ) -> folding_input.Input | Sequence[ResultsForSeed]:
   """Runs data pipeline and/or inference on a single fold input.
 
@@ -608,6 +618,10 @@ def process_fold_input(
       is more than the largest bucket size.
     conformer_max_iterations: Optional override for maximum number of iterations
       to run for RDKit conformer search.
+    force_output_dir: If True, do not create a new output directory even if the
+      existing one is non-empty. Instead use the existing output directory and
+      potentially overwrite existing files. If False, create a new timestamped
+      output directory instead if the existing one is non-empty.
 
   Returns:
     The processed fold input, or the inference results for each seed.
@@ -620,7 +634,11 @@ def process_fold_input(
   if not fold_input.chains:
     raise ValueError('Fold input has no chains.')
 
-  if os.path.exists(output_dir) and os.listdir(output_dir):
+  if (
+      not force_output_dir
+      and os.path.exists(output_dir)
+      and os.listdir(output_dir)
+  ):
     new_output_dir = (
         f'{output_dir}_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}'
     )
@@ -661,7 +679,7 @@ def process_fold_input(
     )
     output = all_inference_results
 
-  print(f'Fold job {fold_input.name} done.\n')
+  print(f'Fold job {fold_input.name} done, output written to {output_dir}\n')
   return output
 
 
@@ -808,6 +826,7 @@ def main(_):
         output_dir=os.path.join(_OUTPUT_DIR.value, fold_input.sanitised_name()),
         buckets=tuple(int(bucket) for bucket in _BUCKETS.value),
         conformer_max_iterations=_CONFORMER_MAX_ITERATIONS.value,
+        force_output_dir=_FORCE_OUTPUT_DIR.value,
     )
     num_fold_inputs += 1
 
