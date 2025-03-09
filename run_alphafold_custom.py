@@ -45,7 +45,7 @@ from alphafold3.data import pipeline
 from alphafold3.jax.attention import attention
 from alphafold3.model import features
 # from alphafold3.model import model
-import model_custom as model
+from alphafold3.model import model_custom as model
 from alphafold3.model import params
 from alphafold3.model import post_processing
 from alphafold3.model.components import utils
@@ -60,6 +60,7 @@ import h5py
 # _HOME_DIR = pathlib.Path('/home/sim/alphafold3/')
 _HOME_DIR = pathlib.Path('/home/appl/git-repo/AlphaFold3/')
 _DEFAULT_MODEL_DIR = _HOME_DIR / 'models'
+# _DEFAULT_MODEL_DIR = _HOME_DIR / 'models/model_103275239_1'
 # _DEFAULT_DB_DIR = _HOME_DIR / 'public_databases'
 # _DEFAULT_DB_DIR = _HOME_DIR / 'AF3DB'
 _DEFAULT_DB_DIR = pathlib.Path('/DB/AF3DB/')
